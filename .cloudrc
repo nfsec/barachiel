@@ -1,0 +1,10 @@
+#!/bin/bash
+
+# Username
+export OS_USERNAME="login"
+# Password
+export OS_PASSWORD="password"
+# Base Project ID
+export OS_TENANT_NAME="project"
+# Default Identity API URL
+export OS_AUTH_URL="http://10.10.1.100:5000/v2.0"

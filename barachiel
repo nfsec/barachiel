@@ -1,0 +1,535 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+# -----------------
+# title            : Book of OpenStack: Barachiel
+# description      : Script for manage virtual machines in OpenStack
+# author           : agresor@nfsec.pl
+# date             : 07/03/2016
+# version          : 0.1
+# license          : Apache License (2.0)
+# usage            : barachiel
+# python version   : 2.7.10
+# required modules : python-novaclient 3.2.0
+#                  : fabric 1.20.2
+# notes            : Type: barakiel -h for help.
+# -----------------
+
+import argparse
+import os
+from getpass import getpass
+
+from fabric.api import *
+from fabric.colors import *
+from fabric.contrib.console import confirm
+from fabric.operations import *
+from novaclient import client as novaclient
+
+
+def parse_arguments():
+    """
+    Function to handle the command line.
+    :return:
+    """
+    parser = argparse.ArgumentParser(prog="barachiel", description="Super Magic OpenStack Server Manager",
+                                     epilog="With geat power comes great responsibility!")
+    subparsers = parser.add_subparsers(help="Avaiable commands: ", dest="route")
+    # Classic: Username / Password
+    classic_parser = subparsers.add_parser("classic", help="Use username & password to login.")
+    classic_parser.add_argument("-F", "--file", required=False, default=".cloudrc", help="Name of .cloudrc file.")
+    classic_parser.add_argument("-p", "--project", required=False, default="", help="OpenStack project ID.")
+    classic_parser.add_argument("-i", "--id", required=True, help="VM instance name.")
+    classic_parser.add_argument("-r", "--range", type=int, nargs=2, metavar=("min", "max"),
+                                help="Minimal & maximal instance range to use.")
+    classic_parser.add_argument("-c", "--command", type=str, required=False, default="uptime",
+                                help="Command to run (default: uptime).")
+    classic_parser.add_argument("-u", "--upload", type=str, required=False, nargs=2, metavar=("local", "remote"),
+                                help="Upload one or more files/dirs to a remote host.")
+    classic_parser.add_argument("-s", "--sudo", action="store_true", help="Run command with sudo.")
+    classic_parser.add_argument("-f", "--failok", action="store_true", help="Its OK if command will fail.")
+    classic_parser.add_argument("-P", "--parallel", action="store_true", help="Run commands in parallel mode.")
+    classic_parser.set_defaults(failok=False)
+    # Key: SSH Key-Based Authentication
+    key_parser = subparsers.add_parser("key", help="Use SSH private key to login.")
+    key_parser.add_argument("-F", "--file", required=False, default=".cloudrc", help="Name of .cloudrc file.")
+    key_parser.add_argument("-p", "--project", required=False, default="", help="OpenStack project ID.")
+    key_parser.add_argument("-i", "--id", required=True, help="VM instance name.")
+    key_parser.add_argument("-r", "--range", type=int, nargs=2, metavar=("min", "max"),
+                            help="Minimal & maximal instance range to use.")
+    key_parser.add_argument("-c", "--command", type=str, required=False, default="uptime",
+                            help="Command to run (default: uptime).")
+    key_parser.add_argument("-u", "--upload", type=str, required=False, nargs=2, metavar=("local", "remote"),
+                            help="Upload one or more files/dirs to a remote host.")
+    key_parser.add_argument("-s", "--sudo", action="store_true", help="Run command with sudo.")
+    key_parser.add_argument("-f", "--failok", action="store_true", help="Its OK if command will fail.")
+    key_parser.add_argument("-P", "--parallel", action="store_true", help="Run commands in parallel mode.")
+    key_parser.set_defaults(failok=False)
+    return parser.parse_args()
+
+
+def error(message, list=[], formatter=None):
+    """
+    Print error message and exit with status 2
+    :param message:
+    :return:
+    """
+    print(message)
+    if (len(list)):
+        for item in list:
+            print(" * " + formatter(item))
+    sys.exit(2)
+
+
+def check_bash_operations(confile):
+    """
+    Check if bash file exists and python script can read it.
+    :param confile:
+    :return:
+    """
+    if os.path.exists(confile):
+        try:
+            open(confile, 'r')
+        except IOError:
+            error("ERROR: Can't read authorization file {0}".format(confile))
+    else:
+        info = """
+        ERROR: Configuration file not found. Please create {0} with content:
+        ---
+        #!/bin/bash
+
+        export OS_USERNAME="login"
+        export OS_PASSWORD="password"
+        export OS_TENANT_NAME="project_name"
+        export OS_AUTH_URL="http://ip_address:5000/v2.0/"
+        ---
+        And type: "source {1}" in your bash shell.
+        """
+        print(info.format(confile, confile))
+        sys.exit(1)
+
+
+def get_nova_creds(confile):
+    """
+    Reads credentials for nova (compute service) from bash environment variables list.
+    :param confile:
+    :return:
+    """
+    check_bash_operations(confile)
+    login_creds = {}
+    if "OS_USERNAME" and "OS_PASSWORD" in os.environ:
+        login_creds['username'] = os.environ['OS_USERNAME']
+        login_creds['api_key'] = os.environ['OS_PASSWORD']
+        login_creds['auth_url'] = os.environ['OS_AUTH_URL']
+        login_creds['project_id'] = os.environ['OS_TENANT_NAME']
+        return login_creds
+    else:
+        error("ERROR: Please load {0} with bash: source {0}".format(confile, confile))
+
+
+def check_nova_creds(login_creds, projectid):
+    """
+    Authenticate and check user in OpenStack.
+    :rtype: object
+    :param login_creds:
+    :param projectid:
+    :return:
+    """
+    if projectid:
+        login_creds['project_id'] = projectid
+    nova = novaclient.Client("2", **login_creds)
+    try:
+        nova.authenticate()
+        return nova
+    except novaclient.exceptions.Unauthorized as e:
+        error("Wrong credentials passed:" + e.message)
+
+
+def list_all_servers(nova, id):
+    """
+    List all available servers from OpenStack.
+    :param nova:
+    :param id:
+    :return:
+    """
+    vms = nova.servers.list()
+    servers = []
+    control_list = {}
+    for vm in vms:
+        if not id or re.search(id + "\d+", vm.name, re.IGNORECASE):
+            ip = vm.addresses.values()[0][0]['addr'] if vm.addresses.values() else "-"
+            servers.append(ip)
+            control_list.update({vm.name:vm.status})
+    if len(servers) == 0:
+        print("\n" + "No machines were detected. Please try again." + "\n")
+        sys.exit(0)
+    print("\n" + "Detected machines:" + "\n")
+    for k, v in control_list.iteritems():
+        print("VM name: {0} :: status: {1}".format(k, v))
+    print("")
+    gogo = set(["yes","y","ye",""])
+    nogo = set(["no","n"])
+    choice = raw_input("Continue with these machines? [yes/no]: ").lower()
+    if choice in gogo:
+        return servers
+    elif choice in nogo:
+        error("Aborting...")
+    else:
+        error("Please respond with 'yes' or 'no'.")
+
+
+def list_range_servers(nova, id, min, max):
+    """
+    List all available servers in range from OpenStack.
+    :param max:
+    :param min:
+    :param nova:
+    :param id:
+    :return:
+    """
+    vms = nova.servers.list()
+    servers = []
+    servers_ip = []
+    range_servers = []
+    control_list = {}
+    for vm in vms:
+        if re.search(id + "\d+", vm.name, re.IGNORECASE):
+            servers.append(vm.name)
+    if len(servers) == 0:
+        print("\n" + "No machines were detected. Please try again." + "\n")
+        sys.exit(0)
+    for r in range(min, max + 1):
+        match = id + str(r)
+        range_servers.append(match)
+    common_servers = set(servers) & set(range_servers)
+    common_servers = list(common_servers)
+    for hostname in common_servers:
+        vmip = nova.servers.find(name=hostname)
+        ip = vmip.addresses.itervalues().next()[0]['addr']
+        control_list.update({vmip.name:vmip.status})
+        servers_ip.append(ip)
+    print("\n" + "Detected machines:" + "\n")
+    for k, v in control_list.iteritems():
+        print("VM name: {0} :: status: {1}".format(k, v))
+    print("")
+    gogo = set(["yes","y","ye",""])
+    nogo = set(["no","n"])
+    choice = raw_input("Continue with these machines? [yes/no]: ").lower()
+    if choice in gogo:
+        return servers_ip
+    elif choice in nogo:
+        error("Aborting...")
+    else:
+        error("Please respond with 'yes' or 'no'.")
+
+
+def command(runthis, failok):
+    """
+    Run this command on every host.
+    :param failok:
+    :param runthis:
+    """
+    with hide("running", "stdout"):
+        host = run("hostname -f")
+        print(red("Hostname: ") + green(host))
+    result = run(runthis, warn_only=True)
+    if failok:
+        pass
+    else:
+        if result.failed and not confirm("Command failed. Continue anyway?"):
+            abort("Aborting at user request.")
+    print(yellow("||| Done.") + "\n")
+
+
+def sudo_command(runthis, failok):
+    """
+    Run this command with sudo on every host.
+    :param failok:
+    :param runthis:
+    """
+    with hide("running", "stdout"):
+        host = run("hostname -f")
+        print(red("Hostname: ") + green(host))
+    result = sudo(runthis, warn_only=True)
+    if failok:
+        pass
+    else:
+        if result.failed and not confirm("Command failed. Continue anyway?"):
+            abort("Aborting at user request.")
+    print(yellow("||| Done.") + "\n")
+
+
+def put_command(putthis, failok):
+    """
+    Copy this file on every host.
+    :param failok:
+    :param putthis:
+    """
+    with hide("running", "stdout"):
+        host = run("hostname -f")
+        print(red("Hostname: ") + green(host))
+    with settings(warn_only=True):
+        result = put(putthis[0], putthis[1], mirror_local_mode=True)
+    if failok:
+        pass
+    else:
+        if result.failed and not confirm("Command failed. Continue anyway?"):
+            abort("Aborting at user request.")
+    print(yellow("||| Done.") + "\n")
+
+
+def sudo_put_command(putthis, failok):
+    """
+    Copy this file with sudo on every host.
+    :param failok:
+    :param putthis:
+    """
+    with hide("running", "stdout"):
+        host = run("hostname -f")
+        print(red("Hostname: ") + green(host))
+    with settings(warn_only=True):
+        result = put(putthis[0], putthis[1], mirror_local_mode=True, use_sudo=True)
+    if failok:
+        pass
+    else:
+        if result.failed and not confirm("Command failed. Continue anyway?"):
+            abort("Aborting at user request.")
+    print(yellow("||| Done.") + "\n")
+
+
+def main():
+    """
+    Main logic.
+    """
+    try:
+        args = parse_arguments()
+        env.skip_bad_hosts = True
+        env.colorize_errors = True
+        env.disable_known_hosts = True
+        nova = check_nova_creds(get_nova_creds(args.file), args.project)
+        if args.route == 'classic':
+            prompt("Enter username: ", "user", default=os.environ['USER'], validate=r'^\w+$')
+            env.password = getpass("Enter password: ")
+            if args.parallel:
+                env.parallel = True
+            if args.range:
+                if args.sudo:
+                    if args.upload and not args.command:
+                        try:
+                            execute(sudo_put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and not args.upload:
+                        try:
+                            execute(sudo_command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and args.upload:
+                        try:
+                            execute(sudo_command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                            execute(sudo_put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.upload and args.command:
+                        try:
+                            execute(sudo_put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                            execute(sudo_command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                else:
+                    if args.upload and not args.command:
+                        try:
+                            execute(put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and not args.upload:
+                        try:
+                            execute(command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and args.upload:
+                        try:
+                            execute(command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                            execute(put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.upload and args.command:
+                        try:
+                            execute(put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                            execute(command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+            else:
+                if args.sudo:
+                    if args.upload and not args.command:
+                        try:
+                            execute(sudo_put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and not args.upload:
+                        try:
+                            execute(sudo_command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and args.upload:
+                        try:
+                            execute(sudo_command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                            execute(sudo_put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.upload and args.command:
+                        try:
+                            execute(sudo_put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                            execute(sudo_command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                else:
+                    if args.upload and not args.command:
+                        try:
+                            execute(put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and not args.upload:
+                        try:
+                            execute(command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and args.upload:
+                        try:
+                            execute(command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                            execute(put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.upload and args.command:
+                        try:
+                            execute(put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                            execute(command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+        elif args.route == 'key':
+            prompt("Enter SSH username: ", "user", default="ubuntu", validate=r'^\w+$')
+            prompt("Enter full path to SSH key: ", "key_filename", default="~/.ssh/id_rsa")
+            if args.parallel:
+                env.parallel = True
+            if args.range:
+                if args.sudo:
+                    if args.upload and not args.command:
+                        try:
+                            execute(sudo_put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and not args.upload:
+                        try:
+                            execute(sudo_command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and args.upload:
+                        try:
+                            execute(sudo_command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                            execute(sudo_put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.upload and args.command:
+                        try:
+                            execute(sudo_put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                            execute(sudo_command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                else:
+                    if args.upload and not args.command:
+                        try:
+                            execute(put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and not args.upload:
+                        try:
+                            execute(command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and args.upload:
+                        try:
+                            execute(command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                            execute(put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+                    elif args.upload and args.command:
+                        try:
+                            execute(put_command, args.upload, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                            execute(command, args.command, args.failok,
+                                    hosts=list_range_servers(nova, args.id, args.range[0], args.range[1]))
+                        except Exception as e:
+                            error(e)
+            else:
+                if args.sudo:
+                    if args.upload and not args.command:
+                        try:
+                            execute(sudo_put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and not args.upload:
+                        try:
+                            execute(sudo_command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and args.upload:
+                        try:
+                            execute(sudo_command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                            execute(sudo_put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.upload and args.command:
+                        try:
+                            execute(sudo_put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                            execute(sudo_command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                else:
+                    if args.upload and not args.command:
+                        try:
+                            execute(put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and not args.upload:
+                        try:
+                            execute(command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.command and args.upload:
+                        try:
+                            execute(command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                            execute(put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+                    elif args.upload and args.command:
+                        try:
+                            execute(put_command, args.upload, args.failok, hosts=list_all_servers(nova, args.id))
+                            execute(command, args.command, args.failok, hosts=list_all_servers(nova, args.id))
+                        except Exception as e:
+                            error(e)
+    except KeyboardInterrupt:
+        error("\n" + "Aborting...")
+
+
+if __name__ == "__main__":
+    main()

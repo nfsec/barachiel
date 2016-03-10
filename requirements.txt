@@ -1,0 +1,2 @@
+python-novaclient==3.2.0
+Fabric==1.10.2

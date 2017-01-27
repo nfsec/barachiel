@@ -5,7 +5,7 @@
 # description      : Script for manage virtual machines in OpenStack
 # author           : agresor@nfsec.pl
 # date             : 07/03/2016
-# version          : 0.1
+# version          : 0.2
 # license          : Apache License (2.0)
 # usage            : barachiel
 # python version   : 2.7.10
@@ -37,7 +37,7 @@ def parse_arguments():
     classic_parser = subparsers.add_parser("classic", help="Use username & password to login.")
     classic_parser.add_argument("-F", "--file", required=False, default=".cloudrc", help="Name of .cloudrc file.")
     classic_parser.add_argument("-p", "--project", required=False, default="", help="OpenStack project ID.")
-    classic_parser.add_argument("-i", "--id", required=True, help="VM instance name.")
+    classic_parser.add_argument("-i", "--id", required=True, help="VM instance name. Use '_all' for all VMs.")
     classic_parser.add_argument("-r", "--range", type=int, nargs=2, metavar=("min", "max"),
                                 help="Minimal & maximal instance range to use.")
     classic_parser.add_argument("-c", "--command", type=str, required=False, default="uptime",
@@ -52,7 +52,7 @@ def parse_arguments():
     key_parser = subparsers.add_parser("key", help="Use SSH private key to login.")
     key_parser.add_argument("-F", "--file", required=False, default=".cloudrc", help="Name of .cloudrc file.")
     key_parser.add_argument("-p", "--project", required=False, default="", help="OpenStack project ID.")
-    key_parser.add_argument("-i", "--id", required=True, help="VM instance name.")
+    key_parser.add_argument("-i", "--id", required=True, help="VM instance name. Use '_all' for all VMs.")
     key_parser.add_argument("-r", "--range", type=int, nargs=2, metavar=("min", "max"),
                             help="Minimal & maximal instance range to use.")
     key_parser.add_argument("-c", "--command", type=str, required=False, default="uptime",
@@ -153,11 +153,17 @@ def list_all_servers(nova, id):
     vms = nova.servers.list()
     servers = []
     control_list = {}
-    for vm in vms:
-        if not id or re.search(id + "\d+", vm.name, re.IGNORECASE):
+    if id == "_all":
+        for vm in vms:
             ip = vm.addresses.values()[0][0]['addr'] if vm.addresses.values() else "-"
             servers.append(ip)
             control_list.update({vm.name:vm.status})
+    else:
+        for vm in vms:
+            if not id or re.search(id + "\d+", vm.name, re.IGNORECASE):
+                ip = vm.addresses.values()[0][0]['addr'] if vm.addresses.values() else "-"
+                servers.append(ip)
+                control_list.update({vm.name:vm.status})
     if len(servers) == 0:
         print("\n" + "No machines were detected. Please try again." + "\n")
         sys.exit(0)

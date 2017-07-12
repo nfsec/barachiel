@@ -10,20 +10,17 @@
 # usage            : barachiel
 # python version   : 2.7.10
 # required modules : python-novaclient 3.2.0
-#                  : fabric 1.20.2
+#                  : fabric 1.10.2
 # notes            : Type: barakiel -h for help.
 # -----------------
 
-import argparse
-import os
+import os, re, sys, argparse
 from getpass import getpass
-
 from fabric.api import *
 from fabric.colors import *
-from fabric.contrib.console import confirm
 from fabric.operations import *
+from fabric.contrib.console import confirm
 from novaclient import client as novaclient
-
 
 def parse_arguments():
     """

@@ -1,6 +1,6 @@
 ## Book of OpenStack: Barachiel  ##
 
-A simple script to mass managing virtual machines in the cloud based on [OpenStack](https://www.openstack.org/) software.
+A simple script for mass virtual machine management in the cloud based on [OpenStack](https://www.openstack.org/) software.
 It gives you the possibility of issuing the same console commands on multiple servers performing the same role. For example: www, daemon, database etc.
 The role must be included in the prefix name with an ordinal number. Authentication is possible through a login and password or SSH key.
 

@@ -15,6 +15,7 @@
 # -----------------
 
 import os, re, sys, argparse
+import logging, logging.handlers
 from getpass import getpass
 from fabric.api import *
 from fabric.colors import *
@@ -256,10 +257,18 @@ def sudo_put_command(putthis, failok):
             abort("Aborting at user request.")
     print(yellow("||| Done.") + "\n")
 
+def logger(logfile):
+    """Basic logging and file rotate."""
+    if os.path.isfile(logfile):
+       size = os.path.getsize(logfile)
+       if size >= 104857600:
+           logging.handlers.RotatingFileHandler(filename=logfile, backupCount=10).doRollover()
+    logging.basicConfig(filename=logfile, format='%(asctime)s : %(levelname)-9s : %(message)s', level=logging.DEBUG)
 
 def main():
     """Main logic."""
     try:
+        logger('barachiel.log')
         args = parse_arguments()
         env.skip_bad_hosts = True
         env.colorize_errors = True

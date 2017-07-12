@@ -13,7 +13,7 @@ with open('requirements.txt') as f:
 
 setup(
     name = 'barachiel',
-    version = '0.2',
+    version = '0.3',
     description = 'Script for manage virtual machines in OpenStack',
     long_description = readme,
     author = 'Patryk Krawaczyński',

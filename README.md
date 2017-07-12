@@ -14,7 +14,7 @@ optional arguments:
   -F FILE, --file FILE  Name of .cloudrc file.
   -p PROJECT, --project PROJECT
                         OpenStack project ID.
-  -i ID, --id ID        VM instance name.
+  -i ID, --id ID        VM instance name. Use '_all' for all VMs.
   -r min max, --range min max
                         Minimal & maximal instance range to use.
   -c COMMAND, --command COMMAND

@@ -1,10 +1,18 @@
 #!/bin/bash
 
 # Username
-export OS_USERNAME="login"
+export OS_USERNAME="username"
 # Password
 export OS_PASSWORD="password"
-# Base Project ID
-export OS_TENANT_NAME="project"
+# Base Project Name
+export OS_PROJECT_NAME="production"
 # Default Identity API URL
-export OS_AUTH_URL="http://10.10.1.100:5000/v2.0"
+export OS_AUTH_URL="http://10.10.1.10:5000/v3"
+# REGION
+export OS_REGION_NAME="eu-central"
+# User Domain Name
+export OS_USER_DOMAIN_NAME="default"
+# User Domain ID
+export OS_USER_DOMAIN_ID="default"
+# Project Domain ID
+export OS_PROJECT_DOMAIN_ID="default"
